@@ -3,11 +3,75 @@ import sqlite3
 import secrets
 from contextlib import contextmanager
 import hashlib
+import re
 
 app = Flask(__name__)
 app.secret_key = 'super_shmooper_secret_key'
 
 DATABASE = 'survey.db'
+
+key_to_VIP = "http://127.0.0.1:5000/admin/stats?key=secret_key_to_VIP"
+
+DEMENTIA_THRESHOLDS = {
+    'yes_threshold': 2,
+    'sometimes_threshold': 3,
+    'critical_questions': [2, 3, 4, 5, 6]
+}
+
+
+def analyze_dementia_risk(answers):
+    risk_score = 0
+    yes_count = 0
+    sometimes_count = 0
+    no_count = 0
+
+    for i, answer_dict in enumerate(answers):
+        if i == 0:
+            continue
+
+        answer = answer_dict['answer']
+        if answer == 'Да':
+            yes_count += 1
+            risk_score += 3
+        elif answer == 'Иногда':
+            sometimes_count += 1
+            risk_score += 1
+        elif answer == 'Нет':
+            no_count += 1
+
+    total_considered = yes_count + sometimes_count + no_count
+
+    if yes_count >= DEMENTIA_THRESHOLDS['yes_threshold'] or sometimes_count >= DEMENTIA_THRESHOLDS[
+        'sometimes_threshold']:
+        risk_level = 'high'
+        message = 'ВНИМАНИЕ: Ваши ответы указывают на возможные признаки ранней деменции!'
+        recommendation = 'Настоятельно рекомендуем обратиться к неврологу для профессиональной консультации и диагностики.'
+        icon = '⚠️'
+        color = '#e74c3c'
+        bg_color = '#ffe0e0'
+    elif yes_count >= 1 or sometimes_count >= 2:
+        risk_level = 'medium'
+        message = '🔍 ОБРАТИТЕ ВНИМАНИЕ: У вас есть некоторые факторы риска'
+        recommendation = 'Рекомендуем проконсультироваться с врачом и следить за своим состоянием.'
+        icon = '🔍'
+        color = '#f39c12'
+        bg_color = '#fff3e0'
+    else:
+        risk_level = 'low'
+        message = '✅ Хорошие новости: значительных признаков деменции не обнаружено'
+        recommendation = 'Продолжайте вести здоровый образ жизни и регулярно проходите профилактические осмотры.'
+        icon = '✅'
+        color = '#27ae60'
+        bg_color = '#e0f5e8'
+
+    details = {
+        'yes_count': yes_count,
+        'sometimes_count': sometimes_count,
+        'no_count': no_count,
+        'risk_score': risk_score
+    }
+
+    return risk_level, message, recommendation, icon, color, bg_color, details
 
 
 def init_db():
@@ -65,7 +129,6 @@ def get_db():
 def sanitize_input(input_string):
     if not input_string:
         return ""
-    import re
     clean = re.sub(r'[<>{}]', '', str(input_string))
     return clean[:500]
 
@@ -350,7 +413,7 @@ RESULT_TEMPLATE = """
             padding: 40px;
             border-radius: 20px;
             box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            max-width: 600px;
+            max-width: 700px;
             width: 100%;
         }
         .success-icon {
@@ -362,6 +425,46 @@ RESULT_TEMPLATE = """
             text-align: center;
             color: #333;
             margin-bottom: 30px;
+        }
+        .warning-box {
+            padding: 25px;
+            border-radius: 15px;
+            margin-bottom: 30px;
+            border-left: 5px solid;
+            animation: slideIn 0.5s ease-out;
+        }
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        .warning-icon {
+            font-size: 48px;
+            text-align: center;
+            margin-bottom: 15px;
+        }
+        .warning-message {
+            font-size: 20px;
+            font-weight: bold;
+            text-align: center;
+            margin-bottom: 15px;
+        }
+        .warning-recommendation {
+            font-size: 16px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .risk-details {
+            background: rgba(0,0,0,0.05);
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 15px;
+            font-size: 14px;
         }
         .answers-list {
             list-style: none;
@@ -382,10 +485,18 @@ RESULT_TEMPLATE = """
             flex: 1;
         }
         .answer-value {
-            color: #667eea;
             font-weight: 600;
             text-align: right;
             flex: 1;
+        }
+        .answer-high-risk {
+            color: #e74c3c;
+        }
+        .answer-medium-risk {
+            color: #f39c12;
+        }
+        .answer-low-risk {
+            color: #27ae60;
         }
         .btn {
             width: 100%;
@@ -405,24 +516,93 @@ RESULT_TEMPLATE = """
         .btn:hover {
             transform: translateY(-2px);
         }
+        .stats {
+            display: flex;
+            justify-content: space-around;
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
+        .stat-item {
+            text-align: center;
+        }
+        .stat-number {
+            font-size: 24px;
+            font-weight: bold;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+        .disclaimer {
+            font-size: 12px;
+            color: #999;
+            text-align: center;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #e0e0e0;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="success-icon">🎉</div>
-        <h1>Спасибо за ответы! Они помогут исследовательским центрам
-        и институтам</h1>
+        <div class="success-icon">{{ icon }}</div>
+        <h1>Спасибо за ваши ответы!</h1>
 
+        <div class="warning-box" style="background: {{ bg_color }}; border-left-color: {{ color }};">
+            <div class="warning-icon">{{ icon }}</div>
+            <div class="warning-message" style="color: {{ color }};">{{ warning_message }}</div>
+            <div class="warning-recommendation">{{ recommendation }}</div>
+            <div class="risk-details">
+                <strong>Детальный анализ:</strong><br>
+                • Ответов "Да": {{ details.yes_count }}<br>
+                • Ответов "Иногда": {{ details.sometimes_count }}<br>
+                • Ответов "Нет": {{ details.no_count }}<br>
+                • Общий балл риска: {{ details.risk_score }}/15
+            </div>
+        </div>
+
+        <h2>Ваши ответы:</h2>
         <ul class="answers-list">
             {% for item in answers %}
             <li class="answer-item">
                 <span class="answer-question">{{ item.question }}</span>
-                <span class="answer-value">{{ item.answer }}</span>
+                <span class="answer-value 
+                    {% if loop.index0 > 0 %}
+                        {% if item.answer == 'Да' %}answer-high-risk
+                        {% elif item.answer == 'Иногда' %}answer-medium-risk
+                        {% else %}answer-low-risk
+                        {% endif %}
+                    {% endif %}">
+                    {{ item.answer }}
+                </span>
             </li>
             {% endfor %}
         </ul>
 
+        <div class="stats">
+            <div class="stat-item">
+                <div class="stat-number" style="color: #e74c3c;">{{ details.yes_count }}</div>
+                <div class="stat-label">Ответов "Да"</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number" style="color: #f39c12;">{{ details.sometimes_count }}</div>
+                <div class="stat-label">Ответов "Иногда"</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number" style="color: #27ae60;">{{ details.no_count }}</div>
+                <div class="stat-label">Ответов "Нет"</div>
+            </div>
+        </div>
+
         <a href="/restart" class="btn">Пройти заново ↻</a>
+
+        <div class="disclaimer">
+            ⚕️ Данный опрос носит информационный характер и не заменяет профессиональную медицинскую диагностику. 
+            При наличии симптомов обязательно обратитесь к врачу.
+        </div>
     </div>
 </body>
 </html>
@@ -542,9 +722,19 @@ def results():
             request.user_agent.string
         )
 
+    risk_level, warning_message, recommendation, icon, color, bg_color, details = analyze_dementia_risk(
+        session['answers'])
+
     return render_template_string(
         RESULT_TEMPLATE,
-        answers=session['answers']
+        answers=session['answers'],
+        warning_message=warning_message,
+        recommendation=recommendation,
+        icon=icon,
+        color=color,
+        bg_color=bg_color,
+        details=details,
+        risk_level=risk_level
     )
 
 
